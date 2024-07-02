@@ -14,43 +14,6 @@ def calc_same_padding(kernel_size):
     pad = kernel_size // 2
     return (pad, pad - (kernel_size + 1) % 2)
 
-
-
-
-class TSiLU(nn.Module):
-    def __init__(self, dim):
-        super().__init__()
-        self.alpha_scale = nn.Parameter(torch.zeros((dim)))
-        self.beta_scale = nn.Parameter(torch.zeros((dim)))
-        self.bias = nn.Parameter(torch.zeros((dim)))
-   
-    
-    def forward(self, x):
-        alpha = self.alpha_scale.exp()
-        
-        beta = self.beta_scale.exp()
-
-        gate = F.sigmoid(x * beta + self.bias)
-       
-        x =  alpha * x * gate
-        
-        return x
-    
-
-class CGLU(nn.Module):
-  def __init__(self):
-    super().__init__()
-    self.m = math.sqrt(2)
-
-
-
-  def forward(self,x):
-
-    gate = torch.special.erfc( x**2 /4 - 1/self.m )
-
-    
-    x = x * gate * F.tanh(F.softplus(x))
-    return x
   
 
 
@@ -89,9 +52,9 @@ class GatedConvBlock(nn.Module):
 
         self.ff_out = nn.Linear(hidden_dim,d_model, bias = False)
 
-        self.act =TSiLU(hidden_dim)
+        self.act =F.mish
 
-        self.l_act = CGLU()
+        self.l_act = F.mish
         
         self.dwconv = nn.Conv1d(hidden_dim, hidden_dim, kernel_size=kernel_size, groups=hidden_dim, bias= False)
         
