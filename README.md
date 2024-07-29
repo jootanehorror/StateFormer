@@ -1,4 +1,6 @@
-StateFormer
+## StateFormer - Pytorch
+
+Mamba-TTS Encoder
 
 ## Usage
 
