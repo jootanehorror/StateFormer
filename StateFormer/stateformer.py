@@ -243,7 +243,7 @@ class Decoder(nn.Module):
 
 
 class StateFormerSeq2Seq(nn.Module):
-    def __init__(self,n_mels, d_model, heads, encoder_n_layer,  decoder_n_layer):
+    def __init__(self,n_mels, d_model, heads, n_vcoab, encoder_n_layer, decoder_n_layer):
         super().__init__(config)
 
         self.encoder = StateFormer(n_mels=n_mels,d_model=d_model,n_layer=encoder_n_layer)
