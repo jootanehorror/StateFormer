@@ -22,17 +22,12 @@ class ConvBlock(nn.Module):
         super().__init__()
         
         self.conv_in = nn.Conv1d(dim_in,dim_out ,kernel_size=kernel_size,stride=stride, padding=padding,bias= False)
-   
-    
         self.norm= BiasNorm(dim_out,-2)
         
         
     def forward(self, x):
         x = F.mish(self.conv_in(x))
-       
-
         x = self.norm(x)
-        
         return x
     
 
@@ -64,13 +59,10 @@ class GatedConvBlock(nn.Module):
     def forward(self, x):
         
         x, y ,gate = self.ff(x).chunk(3, dim = -1)
-
-        x = self.l_act(x)
-
-        gate = gate * self.act(y)
-
-        gate = F.pad(self.norm(gate.transpose(2,1)),self.padding)
         
+        x = self.l_act(x)
+        gate = gate * self.act(y)
+        gate = F.pad(self.norm(gate.transpose(2,1)),self.padding)
         gate = F.dropout(self.dwconv(gate).transpose(2,1), p=0.05 , training=self.training)
 
         x = self.ff_out(x * gate * self.log_scale.exp())
@@ -84,18 +76,19 @@ class FastMultiHeadAttention(nn.Module):
         super().__init__()
         self.causal = causal
         self.n_head = n_head
+        
         if kv_head is None:
             self.kv_nhead = n_head
             kv_state = n_state
         else:
             self.kv_nhead =kv_head
             kv_state = n_state//n_head * kv_head
+            
         self.q = nn.Linear(n_state, n_state, bias = False)
         
         self.window_size=window_size
         self.kv = nn.Linear(n_state, 2 * kv_state, bias=False)
         self.out = nn.Linear(n_state, n_state,  bias=False)
-        
         self.scale = 1. / math.sqrt(n_state//n_head)
 
 
@@ -112,18 +105,12 @@ class FastMultiHeadAttention(nn.Module):
         q = self.q(x)
         k,v = self.kv(xa).chunk(2, dim = -1)
         
-
-
-
         q = rearrange(q, 'b n (h d) -> b n h d', h = h)
         k = rearrange(k, 'b n (h d) -> b n h d', h = kvh)
         v = rearrange(v, 'b n (h d) -> b n h d', h = kvh)
 
-
         out = flash_attn_func(q, k, v, softmax_scale=self.scale,causal=self.causal,window_size=self.window_size,dropout_p=0.15)
-
         
-
         return self.out(out.flatten(start_dim=2))
 
 
@@ -137,11 +124,8 @@ class ScaledSinuEmbedding(nn.Module):
 
     def forward(self, x):
         n, device = x.shape[1], x.device
-
         t = torch.arange(n, device = device).type_as(self.inv_freq)
-
         sinu = torch.einsum('i , j -> i j', t, self.inv_freq)
-
         emb = torch.cat((sinu.sin(), sinu.cos()), dim = -1)
 
         return emb * self.scale
@@ -157,22 +141,16 @@ class StateFormerBlock(nn.Module):
 
         
         self.fcb = GatedConvBlock(d_model,kernel_size=15,ff_mult=2)
-        
         self.fcb_norm = RMSNorm(d_model)
-            
         self.mixer = BiMamba(d_model)
-
         self.norm = RMSNorm(d_model)
 
 
 
 
     def forward(self, x):
-        
         x = x + self.fcb(self.fcb_norm(x))
-
         x = x + self.mixer(self.norm(x))
-
         return x
     
 
@@ -185,24 +163,16 @@ class DecoderBlock(nn.Module):
                  ):
         super().__init__()
 
-
-        
         self.mixer_norm = RMSNorm(d_model)
-        
         self.mixer = Mamba(d_model=d_model)
-
         self.attn_norm = RMSNorm(d_model)
-
         self.cross_attn = FastMultiHeadAttention(d_model, heads,kv_head=kv_heads)
         
     
 
     def forward(self, x, xa):
-        
-        x = x + self.mixer(self.mixer_norm(x))
-        
         x = x + self.cross_attn(self.attn_norm(x), xa)
-
+        x = x + self.mixer(self.mixer_norm(x))
         return x 
     
 
@@ -215,40 +185,26 @@ class StateFormer(nn.Module):
             d_model,
             n_layer,
             
-
-            
- 
     ):
         super(StateFormer, self).__init__()
 
-        
         self.conv1 = ConvBlock(n_mels, d_model,  kernel_size=1, stride = 1,padding=0)
-
         self.conv2 = ConvBlock(d_model, d_model, kernel_size=3, stride = 2)
-
         self.embed = ScaledSinuEmbedding(d_model)
-        
         self.blocks  = nn.ModuleList([StateFormerBlock(d_model) for _ in range(n_layer)])
-
         self.post_norm = RMSNorm(d_model)
         
 
     def forward(self, x):
 
         x = self.conv1(x)
-
         x = self.conv2(x)
 
-
         x = x.transpose(2,1)
-
         x = x + self.embed(x)
-
         for block in self.blocks:
             x = block(x)
-
-        x= self.post_norm(x)
-            
+        x = self.post_norm(x)
         return x
     
 
@@ -266,27 +222,19 @@ class Decoder(nn.Module):
         super(Decoder, self).__init__()
         
         self.embed_tokens = nn.Embedding(n_vocab, d_model, padding_idx=padding_idx)
-        
-        
         self.blocks = nn.ModuleList([DecoderBlock(d_model=d_model, heads =heads) for k_ in range(n_layer)])
-
         self.norm = RMSNorm(d_model)
-
         self.mixer = Mamba(d_model, d_conv=2, expand=4)
-    
         self.post_norm = RMSNorm(d_model)
 
 
     def forward(self, tokens, xa):
 
         x = self.embed_tokens(tokens)
-
         for block in self.blocks:
             x = block(x, xa)
-  
         x = x + F.dropout(self.mixer(self.norm(x)), p=0.2, training=self.training)
         x = self.post_norm(x)
-
         x = F.linear(x, self.embed_tokens.weight.to(x.dtype)) 
 
         return x
@@ -300,8 +248,6 @@ class StateFormerSeq2Seq(nn.Module):
 
         self.encoder = StateFormer(n_mels=config.n_mels,d_model=config.d_model,n_layer=config.encoder_n_layer)
         self.decoder = Decoder(n_vocab=config.n_vocab,d_model=config.d_model,heads=config.heads,n_layer=config.decoder_n_layer)
-        
-
         self.pad_token = self.decoder.padding_idx
         self.start_token = self.decoder.start_idx
         self.vocab_size = self.decoder.vocab_size
@@ -311,7 +257,6 @@ class StateFormerSeq2Seq(nn.Module):
             input_features = None,
             decoder_input_ids = None):
 
-        
         x  = self.encoder(input_features)
 
         lm_logits= self.decoder(decoder_input_ids, x)  
