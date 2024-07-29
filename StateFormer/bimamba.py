@@ -15,7 +15,6 @@ import selective_scan_cuda
 
 
 class SelectiveScanFn(torch.autograd.Function):
-
     @staticmethod
     def forward(ctx, u, delta, A, B, C, D=None, z=None, delta_bias=None, delta_softplus=False,
                 return_last_state=False):
@@ -59,12 +58,10 @@ class SelectiveScanFn(torch.autograd.Function):
             u, delta, A, B, C, D, z, delta_bias, x, out = ctx.saved_tensors
         if dout.stride(-1) != 1:
             dout = dout.contiguous()
-        # The kernel supports passing in a pre-allocated dz (e.g., in case we want to fuse the
-        # backward of selective_scan_cuda with the backward of chunk).
-        # Here we just pass in None and dz will be allocated in the C++ code.
+
         du, ddelta, dA, dB, dC, dD, ddelta_bias, *rest = selective_scan_cuda.bwd(
             u, delta, A, B, C, D, z, delta_bias, dout, x, out, None, ctx.delta_softplus,
-            False  # option to recompute out_z, not used here
+            False
         )
         dz = rest[0] if ctx.has_z else None
         dB = dB.squeeze(1) if getattr(ctx, "squeeze_B", False) else dB
@@ -79,10 +76,6 @@ class SelectiveScanFn(torch.autograd.Function):
 
 def selective_scan_fn(u, delta, A, B, C, D=None, z=None, delta_bias=None, delta_softplus=False,
                      return_last_state=False):
-    """if return_last_state is True, returns (out, last_state)
-    last_state has shape (batch, dim, dstate). Note that the gradient of the last state is
-    not considered in the backward pass.
-    """
     return SelectiveScanFn.apply(u, delta, A, B, C, D, z, delta_bias, delta_softplus, return_last_state)
 
 
@@ -95,10 +88,8 @@ class BiMambaInnerFn(torch.autograd.Function):
                 out_proj_weight, out_proj_bias,
                 A, B=None, C=None, D=None, delta_bias=None, B_proj_bias=None,
                 C_proj_bias=None, delta_softplus=True, checkpoint_lvl=1):
-        """
-             xz: (batch, dim, seqlen)
-        """
-        assert causal_conv1d_cuda is not None, "causal_conv1d_cuda is not available. Please install causal-conv1d."
+
+        assert causal_conv1d_cuda is not None,
         assert checkpoint_lvl in [0, 1]
         L = xz.shape[-1]
         delta_rank = delta_proj_weight.shape[1]
@@ -117,9 +108,7 @@ class BiMambaInnerFn(torch.autograd.Function):
         conv1d_out = causal_conv1d_cuda.causal_conv1d_fwd(
             x, conv1d_weight, conv1d_bias, None, None, None, True
         )
-        # We're being very careful here about the layout, to avoid extra transposes.
-        # We want delta to have d as the slowest moving dimension
-        # and L as the fastest moving dimension, since those are what the ssm_scan kernel expects.
+
         x_dbl = F.linear(rearrange(conv1d_out, 'b d l -> (b l) d'), x_proj_weight)  # (bl d)
         delta = rearrange(delta_proj_weight @ x_dbl[:, :delta_rank].t(), "d (b l) -> b d l", l = L)
         ctx.is_variable_B = B is None
@@ -131,7 +120,6 @@ class BiMambaInnerFn(torch.autograd.Function):
             if B_proj_bias is not None:
                 B = B + B_proj_bias.to(dtype=B.dtype)
             if not A.is_complex():
-                # B = rearrange(B, "(b l) dstate -> b dstate l", l=L).contiguous()
                 B = rearrange(B, "(b l) dstate -> b 1 dstate l", l=L).contiguous()
             else:
                 B = rearrange(B, "(b l) (dstate two) -> b 1 dstate (l two)", l=L, two=2).contiguous()
@@ -143,7 +131,7 @@ class BiMambaInnerFn(torch.autograd.Function):
             if C_proj_bias is not None:
                 C = C + C_proj_bias.to(dtype=C.dtype)
             if not A.is_complex():
-                # C = rearrange(C, "(b l) dstate -> b dstate l", l=L).contiguous()
+  
                 C = rearrange(C, "(b l) dstate -> b 1 dstate l", l=L).contiguous()
             else:
                 C = rearrange(C, "(b l) (dstate two) -> b 1 dstate (l two)", l=L, two=2).contiguous()
@@ -158,7 +146,7 @@ class BiMambaInnerFn(torch.autograd.Function):
         ctx.delta_softplus = delta_softplus
         ctx.out_proj_bias_is_None = out_proj_bias is None
         ctx.checkpoint_lvl = checkpoint_lvl
-        if checkpoint_lvl >= 1:  # Will recompute conv1d_out and delta in the backward pass
+        if checkpoint_lvl >= 1: 
             conv1d_out, delta = None, None
         ctx.save_for_backward(xz, conv1d_weight, conv1d_bias, x_dbl, x_proj_weight,
                               delta_proj_weight, out_proj_weight, conv1d_out, delta,
@@ -168,7 +156,7 @@ class BiMambaInnerFn(torch.autograd.Function):
     @staticmethod
     @custom_bwd
     def backward(ctx, dout):
-        # dout: (batch, seqlen, dim)
+       
         assert causal_conv1d_cuda is not None, "causal_conv1d_cuda is not available. Please install causal-conv1d."
         (xz, conv1d_weight, conv1d_bias, x_dbl, x_proj_weight, delta_proj_weight, out_proj_weight,
          conv1d_out, delta, A, B, C, D, delta_bias, scan_intermediates, out) = ctx.saved_tensors
@@ -184,16 +172,15 @@ class BiMambaInnerFn(torch.autograd.Function):
             )
             delta = rearrange(delta_proj_weight @ x_dbl[:, :delta_rank].t(),
                               "d (b l) -> b d l", l = L)
-        # The kernel supports passing in a pre-allocated dz (e.g., in case we want to fuse the
-        # backward of selective_scan_cuda with the backward of chunk).
-        dxz = torch.empty_like(xz)  # (batch, dim, seqlen)
+
+        dxz = torch.empty_like(xz)
         dx, dz = dxz.chunk(2, dim=1)
         dout = rearrange(dout, "b l e -> e (b l)")
         dout_y = rearrange(out_proj_weight.t() @ dout, "d (b l) -> b d l", l=L)
         dconv1d_out, ddelta, dA, dB, dC, dD, ddelta_bias, dz, out_z = selective_scan_cuda.bwd(
             conv1d_out, delta, A, B, C, D, z, delta_bias, dout_y, scan_intermediates, out, dz,
             ctx.delta_softplus,
-            True  # option to recompute out_z
+            True 
         )
         dout_proj_weight = torch.einsum("eB,dB->ed", dout, rearrange(out_z, "b d l -> d (b l)"))
         dout_proj_bias = dout.sum(dim=(0, 1)) if not ctx.out_proj_bias_is_None else None
@@ -224,8 +211,7 @@ class BiMambaInnerFn(torch.autograd.Function):
         dx_proj_weight = torch.einsum("Br,Bd->rd", dx_dbl, rearrange(conv1d_out, "b d l -> (b l) d"))
         dconv1d_out = torch.addmm(dconv1d_out, x_proj_weight.t(), dx_dbl.t(), out=dconv1d_out)
         dconv1d_out = rearrange(dconv1d_out, "d (b l) -> b d l", b=x.shape[0], l=x.shape[-1])
-        # The kernel supports passing in a pre-allocated dx (e.g., in case we want to fuse the
-        # backward of conv1d with the backward of chunk).
+
         dx, dconv1d_weight, dconv1d_bias, *_ = causal_conv1d_cuda.causal_conv1d_bwd(
             x, conv1d_weight, conv1d_bias, dconv1d_out, None, None, None, dx, False, True
         )
@@ -261,9 +247,7 @@ def bimamba_inner_ref(
     d_state = A.shape[-1] * (1 if not A.is_complex() else 2)
     x, z = xz.chunk(2, dim=1)
     x = causal_conv1d_fn(x, rearrange(conv1d_weight, "d 1 w -> d w"), conv1d_bias, activation="silu")
-    # We're being very careful here about the layout, to avoid extra transposes.
-    # We want delta to have d as the slowest moving dimension
-    # and L as the fastest moving dimension, since those are what the ssm_scan kernel expects.
+
     x_dbl = F.linear(rearrange(x, 'b d l -> (b l) d'), x_proj_weight)  # (bl d)
     delta = delta_proj_weight @ x_dbl[:, :delta_rank].t()
     delta = rearrange(delta, "d (b l) -> b d l", l=L)
@@ -348,7 +332,7 @@ class BiMamba(nn.Module):
         )
         self.dt_proj = nn.Linear(self.dt_rank, self.d_inner, bias=True, **factory_kwargs)
 
-        # Initialize special dt projection to preserve variance at initialization
+        
         dt_init_std = self.dt_rank**-0.5 * dt_scale
         if dt_init == "constant":
             nn.init.constant_(self.dt_proj.weight, dt_init_std)
@@ -357,19 +341,19 @@ class BiMamba(nn.Module):
         else:
             raise NotImplementedError
 
-        # Initialize dt bias so that F.softplus(dt_bias) is between dt_min and dt_max
+  
         dt = torch.exp(
             torch.rand(self.d_inner, **factory_kwargs) * (math.log(dt_max) - math.log(dt_min))
             + math.log(dt_min)
         ).clamp(min=dt_init_floor)
-        # Inverse of softplus: https://github.com/pytorch/pytorch/issues/72759
+       
         inv_dt = dt + torch.log(-torch.expm1(-dt))
         with torch.no_grad():
             self.dt_proj.bias.copy_(inv_dt)
-        # Our initialization would set all Linear.bias to zero, need to mark this one as _no_reinit
+        
         self.dt_proj.bias._no_reinit = True
 
-        # S4D real initialization
+        
         A = repeat(
             torch.arange(1, self.d_state + 1, dtype=torch.float32, device=device),
             "n -> d n",
@@ -379,17 +363,13 @@ class BiMamba(nn.Module):
         self.A_log = nn.Parameter(A_log)
         self.A_log._no_weight_decay = True
 
-        # D "skip" parameter
         self.D = nn.Parameter(torch.ones(self.d_inner, device=device))  # Keep in fp32
         self.D._no_weight_decay = True
 
         self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=bias, **factory_kwargs)
 
     def forward(self, hidden_states, inference_params=None):
-        """
-        hidden_states: (B, L, D)
-        Returns: same shape as hidden_states
-        """
+
         batch, seqlen, dim = hidden_states.shape
 
        
@@ -415,8 +395,8 @@ class BiMamba(nn.Module):
                 self.out_proj.weight,
                 self.out_proj.bias,
                 A,
-                None,  # input-dependent B
-                None,  # input-dependent C
+                None, 
+                None,  
                 self.D.float(),
                 delta_bias=self.dt_proj.bias.float(),
                 delta_softplus=True,
@@ -431,8 +411,8 @@ class BiMamba(nn.Module):
                 self.out_proj.weight,
                 self.out_proj.bias,
                 A,
-                None,  # input-dependent B
-                None,  # input-dependent C
+                None,  
+                None, 
                 self.D.float(),
                 delta_bias=self.dt_proj.bias.float(),
                 delta_softplus=True,
