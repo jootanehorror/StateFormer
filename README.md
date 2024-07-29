@@ -5,16 +5,16 @@ Mamba-TTS Encoder
 ## Parameters
 
 - `n_mels`: int.  
-Number of mel frequency bands to extract from the audio signal using mel scaling. Higher values allow for extracting more detailed features based on the mel scale.
+Number of mel frequency bands to extract from the audio signal using mel scaling/
 
 - `d_model`: int
-Dimension of the model
+Dimension of the model/
 
 - `heads`: int.  
-Number of heads in Cross Attention layer
+Number of heads in Cross Attention layer/
 
 - `n_vocab`: int.  
-Size of the vocabulary, representing the total number of unique tokens in the text data being processed.
+Size of the vocabulary.
 
 - `encoder_n_layers`: int.  
 Number of Encoder blocks.
